@@ -136,10 +136,11 @@ function GoalList({ goals, onChange }) {
 }
 
 // ── Modal ──
+// Never closes on background click/drag. Only the X button closes.
 function Modal({ title, onClose, children, width = 500 }) {
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: 16 }} onClick={onClose}>
-      <div style={{ background: C.surface, borderRadius: 8, border: `1px solid ${C.border}`, padding: 24, width: "100%", maxWidth: width, maxHeight: "90vh", overflow: "auto" }} onClick={e => e.stopPropagation()}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: 16 }}>
+      <div style={{ background: C.surface, borderRadius: 8, border: `1px solid ${C.border}`, padding: 24, width: "100%", maxWidth: width, maxHeight: "90vh", overflow: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
           <span style={{ fontSize: 15, fontWeight: 700 }}>{title}</span>
           <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 4, color: C.muted, fontSize: 11, fontFamily: mono, padding: "4px 10px", cursor: "pointer" }}>✕</button>
@@ -182,15 +183,23 @@ export default function ClientPortal() {
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState(null);
 
-  // Form
-  const [title, setTitle] = useState("");
-  const [goals, setGoals] = useState([""]);
-  const [details, setDetails] = useState("");
-  const [priority, setPriority] = useState("normal");
-  const [deadline, setDeadline] = useState("");
+  // Form (cached to localStorage)
+  const formCache = (() => { try { return JSON.parse(localStorage.getItem("icraft-submit-form") || "null"); } catch { return null; } })();
+  const [title, setTitle] = useState(formCache?.title ?? "");
+  const [goals, setGoals] = useState(formCache?.goals ?? [""]);
+  const [details, setDetails] = useState(formCache?.details ?? "");
+  const [priority, setPriority] = useState(formCache?.priority ?? "normal");
+  const [deadline, setDeadline] = useState(formCache?.deadline ?? "");
   const [store, setStore] = useState("");
   const [submitStatus, setSubmitStatus] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Persist form drafts
+  useEffect(() => {
+    localStorage.setItem("icraft-submit-form", JSON.stringify({ title, goals, details, priority, deadline }));
+  }, [title, goals, details, priority, deadline]);
+
+  const clearFormCache = () => localStorage.removeItem("icraft-submit-form");
 
   const toastTimer = useRef(null);
   const showToast = (message, type = "info") => {
@@ -261,6 +270,7 @@ export default function ClientPortal() {
       if (data.success) {
         setSubmitStatus({ type: "success", text: "Request submitted. You'll hear back shortly." });
         setTitle(""); setGoals([""]); setDetails(""); setPriority("normal"); setDeadline("");
+        clearFormCache();
         fetchProjects();
       } else {
         setSubmitStatus({ type: "error", text: data.error || "Failed to submit." });
@@ -298,13 +308,29 @@ export default function ClientPortal() {
 
   // ── Payment Modal ──
   const PaymentModal = ({ project }) => {
-    const [amount, setAmount] = useState("");
-    const [method, setMethod] = useState("");
-    const [note, setNote] = useState("");
+    const cacheKey = `icraft-payment-${project.id}`;
+    const cached = (() => { try { return JSON.parse(localStorage.getItem(cacheKey) || "null"); } catch { return null; } })();
+
+    const [amount, setAmount] = useState(cached?.amount ?? "");
+    const [method, setMethod] = useState(cached?.method ?? "");
+    const [note, setNote] = useState(cached?.note ?? "");
+
+    useEffect(() => {
+      localStorage.setItem(cacheKey, JSON.stringify({ amount, method, note }));
+    }, [amount, method, note]);
+
+    const clearCache = () => localStorage.removeItem(cacheKey);
 
     const cost = project.finalCost || project.estimatedCost || 0;
     const confirmed = (project.payments || []).filter(p => p.confirmed).reduce((s, p) => s + p.amount, 0);
     const remaining = cost - confirmed;
+
+    const handleMark = () => {
+      if (parseFloat(amount) > 0) {
+        clearCache();
+        markPayment(project.id, parseFloat(amount), method, note);
+      }
+    };
 
     return (
       <Modal title="Mark Payment" onClose={() => setModal(null)}>
@@ -339,7 +365,7 @@ export default function ClientPortal() {
           <input style={inputBase} value={note} onChange={e => setNote(e.target.value)} placeholder="Optional reference or note" />
         </div>
 
-        <button onClick={() => { if (parseFloat(amount) > 0) markPayment(project.id, parseFloat(amount), method, note); }}
+        <button onClick={handleMark}
           disabled={!amount || parseFloat(amount) <= 0}
           style={{
             width: "100%", padding: "12px", borderRadius: 4, border: `1px solid ${C.border}`,
